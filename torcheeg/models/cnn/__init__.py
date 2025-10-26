@@ -1,5 +1,5 @@
 from .ccnn import CCNN
-from .eegnet import EEGNet
+from .eegnet import EEGNet, PACNet, BandEEGNet
 from .fbccnn import FBCCNN
 from .fbcnet import FBCNet
 from .fbmsnet import FBMSNet

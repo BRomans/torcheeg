@@ -3,7 +3,12 @@ from typing import Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_scatter import scatter_add
+try:
+    from torch_scatter import scatter_add
+except ImportError:
+    raise ImportError(
+        "To use RGNN, please install `torch-scatter` first. "
+    )
 
 
 class LazyLoader:

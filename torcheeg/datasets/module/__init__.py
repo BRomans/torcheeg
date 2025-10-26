@@ -9,3 +9,4 @@ from .pair_dataset import PairDataset
 from .personal_identification import *
 from .sleep_stage_detection import *
 from .ssvep import *
+from .cognitive_workload import *

@@ -132,3 +132,135 @@ class EEGNet(nn.Module):
         x = self.lin(x)
 
         return x
+    
+    
+class BandEEGNet(nn.Module):
+    """
+    EEGNet variant that processes frequency-domain input features
+    (e.g., PSD or band power per electrode x frequency band).
+
+    Input shape: [n, 1, num_electrodes, num_bands]
+    Example: (batch, 1, 32 electrodes, 5 frequency bands)
+    """
+
+    def __init__(self, num_electrodes=32, num_bands=5, F1=8, D=2, F2=16,
+                 dropout=0.5, num_classes=2, kernel_1=3, kernel_2=3):
+        super().__init__()
+        self.num_electrodes = num_electrodes
+        self.num_bands = num_bands
+        self.F1 = F1
+        self.D = D
+        self.F2 = F2
+        self.dropout = dropout
+        self.num_classes = num_classes
+
+        # Spectral processing along frequency dimension
+        self.block_spectral = nn.Sequential(
+            nn.Conv2d(1, F1, (1, kernel_1), padding=(0, kernel_1 // 2), bias=False),
+            nn.BatchNorm2d(F1),
+            nn.ELU(),
+            nn.AvgPool2d((1, 2), stride=(1, 2)),
+            nn.Dropout(p=dropout)
+        )
+
+        # Spatial processing across electrodes
+        self.block_spatial = nn.Sequential(
+            Conv2dWithConstraint(F1, F1 * D, (num_electrodes, 1), max_norm=1, groups=F1, bias=False),
+            nn.BatchNorm2d(F1 * D),
+            nn.ELU(),
+            nn.Dropout(p=dropout)
+        )
+
+        # Feature mixing across frequency bands
+        self.block_feature = nn.Sequential(
+            nn.Conv2d(F1 * D, F2, (1, kernel_2), padding=(0, kernel_2 // 2), bias=False),
+            nn.BatchNorm2d(F2),
+            nn.ELU(),
+            nn.AvgPool2d((1, 2)),
+            nn.Dropout(p=dropout)
+        )
+
+        self.classifier = nn.Linear(self._feature_dim(), num_classes)
+
+    def _feature_dim(self):
+        with torch.no_grad():
+            x = torch.zeros(1, 1, self.num_electrodes, self.num_bands)
+            x = self.block_spectral(x)
+            x = self.block_spatial(x)
+            x = self.block_feature(x)
+            return x.flatten(start_dim=1).shape[1]
+
+    def forward(self, x):
+        x = self.block_spectral(x)
+        x = self.block_spatial(x)
+        x = self.block_feature(x)
+        x = x.flatten(start_dim=1)
+        x = self.classifier(x)
+        return x
+    
+
+
+
+class PACNet(nn.Module):
+    """
+    PACNet: Multi-branch EEGNet for power/frequency bands.
+    Each branch learns spectral-spatial features from a single band.
+    - Paper: Jiajun Li, Yu Qi, Yu Qi1, Gang Pan, Gang Pan. Phase-amplitude coupling-based adaptive filters for neural signal decoding.
+    - URL: https://www.frontiersin.org/journals/neuroscience/articles/10.3389/fnins.2023.1153568/full    
+    """
+
+    def __init__(self, num_electrodes=32, num_classes=2, bands=('delta', 'theta', 'alpha', 'beta'), 
+                 F1=8, D=2, F2=16, dropout=0.5, kernel_1=64, kernel_2=16):
+        super().__init__()
+        self.bands = bands
+        self.num_bands = len(bands)
+        self.branches = nn.ModuleList()
+
+        for _ in bands:
+            branch = nn.Sequential(
+                nn.Conv2d(1, F1, (1, kernel_1), padding=(0, kernel_1 // 2), bias=False),
+                nn.BatchNorm2d(F1),
+                Conv2dWithConstraint(F1, F1 * D, (num_electrodes, 1), max_norm=1, groups=F1, bias=False),
+                nn.BatchNorm2d(F1 * D),
+                nn.ELU(),
+                nn.AvgPool2d((1, 4)),
+                nn.Dropout(p=dropout),
+                nn.Conv2d(F1 * D, F2, (1, kernel_2), padding=(0, kernel_2 // 2), bias=False),
+                nn.BatchNorm2d(F2),
+                nn.ELU(),
+                nn.AvgPool2d((1, 8)),
+                nn.Dropout(p=dropout)
+            )
+            self.branches.append(branch)
+
+        # After concatenating features across bands
+        self.fc = nn.Linear(self._feature_dim(num_electrodes), num_classes)
+
+    def _feature_dim(self, num_electrodes):
+        with torch.no_grad():
+            x = torch.zeros(1, 1, num_electrodes, 128)
+            feats = []
+            for branch in self.branches:
+                feats.append(branch(x))
+            x = torch.cat(feats, dim=1)
+            return x.flatten(start_dim=1).shape[1]
+
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): Input tensor of shape [N, B, C, T], where
+                N: batch size,
+                B: number of frequency bands,
+                C: number of electrodes,
+                T: number of time points.
+        Returns:
+            torch.Tensor: Output tensor of shape [N, num_classes].
+        """
+        # x shape: [N, B, C, T]
+        outs = []
+        for i in range(self.num_bands):
+            out_i = self.branches[i](x[:, i:i+1, :, :])
+            outs.append(out_i)
+        x = torch.cat(outs, dim=1)
+        x = x.flatten(start_dim=1)
+        return self.fc(x)
