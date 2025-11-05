@@ -39,7 +39,7 @@ class RearrangeElectrode(EEGTransform):
         self.target = target
 
         assert missing in [
-            'random', 'zero', 'mean'
+            'random', 'zero', 'mean', 'approximate_mean'
         ], f'Invalid missing method {missing}, should be one of [random, zero, mean].'
 
         self.missing = missing
@@ -99,11 +99,14 @@ class ImprovedRearrangeElectrode(RearrangeElectrode):
                  neighbor_map: Dict[str, List[str]] = None,
                  neighbor_weights: Dict[str, List[float]] = None,
                  apply_to_baseline: bool = False):
-        super(ImprovedRearrangeElectrode, self).__init__(source, target, missing=missing, apply_to_baseline=apply_to_baseline)
+        super(ImprovedRearrangeElectrode, self).__init__(source, target, missing='mean', apply_to_baseline=apply_to_baseline)
         
         if missing not in ['random', 'zero', 'mean', 'approximate_mean']:
             raise ValueError(f"Invalid missing method {missing}, should be one of ['random', 'zero', 'mean', 'approximate_mean']")
 
+        # Override missing method
+        self.missing = missing
+        
         # Dictionary of closest neighbors for missing electrodes by default (example for your channel sets)
         self.neighbor_map = neighbor_map or {
             'FZ': ['F3', 'F4'],
