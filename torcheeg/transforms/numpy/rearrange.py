@@ -88,3 +88,71 @@ class RearrangeElectrode(EEGTransform):
                 'target': self.target,
                 'missing': self.missing
             })
+
+
+
+class ImprovedRearrangeElectrode(RearrangeElectrode):
+    def __init__(self,
+                 source: List[str],
+                 target: List[str],
+                 missing: str = 'approximate_mean',
+                 neighbor_map: Dict[str, List[str]] = None,
+                 neighbor_weights: Dict[str, List[float]] = None,
+                 apply_to_baseline: bool = False):
+        super(ImprovedRearrangeElectrode, self).__init__(source, target, missing=missing, apply_to_baseline=apply_to_baseline)
+        
+        if missing not in ['random', 'zero', 'mean', 'approximate_mean']:
+            raise ValueError(f"Invalid missing method {missing}, should be one of ['random', 'zero', 'mean', 'approximate_mean']")
+
+        # Dictionary of closest neighbors for missing electrodes by default (example for your channel sets)
+        self.neighbor_map = neighbor_map or {
+            'FZ': ['F3', 'F4'],
+            'C3': ['FC5', 'F3'],
+            'CZ': ['FC5', 'FC6'],
+            'C4': ['FC6', 'F4'],
+            'PZ': ['P7', 'P8'],
+            'PO7': ['P7', 'O1'],
+            'OZ': ['O1', 'O2'],
+            'PO8': ['P8', 'O2']
+        }
+        # Optional weights for neighbors (must sum to 1), default uniform
+        self.neighbor_weights = neighbor_weights or {key: [1/len(val)]*len(val) for key, val in self.neighbor_map.items()}
+
+    def apply(self, eeg: np.ndarray, **kwargs) -> np.ndarray:
+        output = np.zeros((len(self.target), eeg.shape[1]))
+        for i, target in enumerate(self.target):
+            if target in self.source:
+                output[i] = eeg[self.source.index(target)]
+            else:
+                if self.missing == 'random':
+                    output[i] = np.random.randn(eeg.shape[1])
+                elif self.missing == 'zero':
+                    output[i] = np.zeros(eeg.shape[1])
+                elif self.missing == 'mean':
+                    output[i] = np.mean(eeg, axis=0)
+                elif self.missing == 'approximate_mean':
+                    neighbors = self.neighbor_map.get(target, None)
+                    weights = self.neighbor_weights.get(target, None)
+                    if neighbors is not None and weights is not None:
+                        valid_neighbors = [n for n in neighbors if n in self.source]
+                        valid_weights = [weights[j] for j, n in enumerate(neighbors) if n in self.source]
+                        if valid_neighbors:
+                            weighted_sum = np.zeros(eeg.shape[1])
+                            total_weight = sum(valid_weights)
+                            for n, w in zip(valid_neighbors, valid_weights):
+                                weighted_sum += w / total_weight * eeg[self.source.index(n)]
+                            output[i] = weighted_sum
+                        else:
+                            # fallback if no known neighbors
+                            output[i] = np.mean(eeg, axis=0)
+                    else:
+                        output[i] = np.mean(eeg, axis=0)
+        return output
+    
+    @property
+    def repr_body(self) -> Dict:
+        return dict(
+            super().repr_body, **{
+                'neighbor_map': self.neighbor_map,
+                'neighbor_weights': self.neighbor_weights
+            })
